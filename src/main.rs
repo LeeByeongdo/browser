@@ -3,6 +3,7 @@ use std::fmt::format;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
+use std::ops::Add;
 use std::sync::Arc;
 
 struct URL {
@@ -25,7 +26,7 @@ struct Response {
 
 fn main() {
     // utf-8 encoded
-    // let url = "https://example.org";
+    let url = "https://example.org";
 
     // ISO-8859-1 encoded
     // let url = "https://www.google.com";
@@ -34,7 +35,7 @@ fn main() {
     // let url = "file:///Users/byeongdolee/ip_geolocation_2023_04_25_12_42_22.txt";
 
     //data
-    let url = "data:text/html,Hello world!";
+    // let url = "data:text/html,Hello world!";
 
     if url.starts_with("file://") {
         let path = &url[7..];
@@ -155,7 +156,6 @@ fn request(url: &str) -> Result<Response, &str> {
         );
     }
 
-    println!("{:?}", headers);
     // assert!(!headers.contains_key("transfer-encoding"));
     // assert!(!headers.contains_key("content-encoding"));
 
@@ -176,17 +176,32 @@ fn request(url: &str) -> Result<Response, &str> {
 
 fn show(body: &String) {
     let mut in_angle = false;
+    let mut in_body = false;
+    let mut current_tag = String::new();
 
     for (_, c) in body.chars().enumerate() {
         match c {
             '<' => {
                 in_angle = true;
+                current_tag = String::new();
             }
             '>' => {
                 in_angle = false;
             }
             _ => {
-                if !in_angle {
+                if in_angle {
+                    current_tag = current_tag.add(c.to_string().as_str());
+                }
+
+                if current_tag == "body" {
+                    in_body = true;
+                }
+
+                if current_tag == "/body" {
+                    in_body = false;
+                }
+
+                if !in_angle && in_body {
                     print!("{}", c);
                 }
             }
