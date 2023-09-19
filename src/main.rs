@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt::format;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::sync::Arc;
@@ -10,6 +11,11 @@ struct URL {
     path: String,
 }
 
+struct Header {
+    key: String,
+    value: String,
+}
+
 #[derive(Debug)]
 struct Response {
     headers: HashMap<String, String>,
@@ -18,10 +24,10 @@ struct Response {
 
 fn main() {
     // utf-8 encoded
-    // let url = "https://example.org";
+    let url = "https://example.org";
 
-    // utf-8 encoded
-    let url = "https://www.google.com";
+    // ISO-8859-1 encoded
+    // let url = "https://www.google.com";
 
     load(url);
 }
@@ -88,7 +94,17 @@ fn request(url: &str) -> Result<Response, &str> {
             .unwrap();
     let mut tls = rustls::Stream::new(&mut conn, &mut stream);
 
-    tls.write(format!("GET {} HTTP/1.0\r\nHost: {}\r\n\r\n", url.path, url.host).as_bytes())
+    let request_headers = vec![
+        Header { key: String::from("Host"), value: String::from(url.host) },
+        Header { key: String::from("Connection"), value: String::from("close") },
+        Header { key: String::from("User-Agent"), value: String::from("BDBDBDLEE-BROWSER") },
+        // Header { key: String::from("Accept-Encoding"), value: String::from("gzip") },
+    ];
+
+    let header_part = request_headers.iter().fold(String::new(), |a, b| format!("{}{}: {}\r\n", a, b.key, b.value));
+    println!("{}", header_part);
+
+    tls.write(format!("GET {} HTTP/1.1\r\n{}\r\n", url.path, header_part).as_bytes())
         .expect("error to write");
 
     let mut reader = BufReader::new(tls);
@@ -121,10 +137,9 @@ fn request(url: &str) -> Result<Response, &str> {
         );
     }
 
-    assert!(!headers.contains_key("transfer-encoding"));
-    assert!(!headers.contains_key("content-encoding"));
-
-    println!("{:?}", headers["content-type"]);
+    println!("{:?}", headers);
+    // assert!(!headers.contains_key("transfer-encoding"));
+    // assert!(!headers.contains_key("content-encoding"));
 
     if headers["content-type"] == "text/html; charset=ISO-8859-1" {
         let mut buffer = Vec::new();
