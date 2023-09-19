@@ -37,6 +37,13 @@ fn main() {
     //data
     // let url = "data:text/html,Hello world!";
 
+    // view-source
+    let url = "view-source:https://example.org";
+
+    load(url);
+}
+
+fn load(url: &str) {
     if url.starts_with("file://") {
         let path = &url[7..];
         let contents = fs::read_to_string(path).expect(format!("Can not read file: {}", path).as_str());
@@ -46,15 +53,21 @@ fn main() {
         let blocks: Vec<&str> = url.splitn(2, ",").collect();
         println!("type: {}\ncontent: {}", blocks[0], blocks[1]);
         return;
+    } else if url.starts_with("view-source:") {
+        let res = request(url).unwrap();
+        show(&transform(&res.body));
+        return;
     }
 
-    load(url);
+    let res = request(url).unwrap();
+    show(&res.body);
 }
 
-fn load(url: &str) {
-    let res = request(url).unwrap();
-    // println!("{}", res.body);
-    show(&res.body);
+fn transform(body: &String) -> String {
+    let mut result = String::from("<body>");
+    result.push_str(body.replace("<", "&lt;").replace(">", "&gt;").as_str());
+    result.push_str("</body>");
+    return result;
 }
 
 fn parse_url(url: &str) -> URL {
