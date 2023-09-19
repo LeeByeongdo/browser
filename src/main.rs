@@ -31,12 +31,19 @@ fn main() {
     // let url = "https://www.google.com";
 
     //file
-    let url = "file:///Users/byeongdolee/ip_geolocation_2023_04_25_12_42_22.txt";
+    // let url = "file:///Users/byeongdolee/ip_geolocation_2023_04_25_12_42_22.txt";
+
+    //data
+    let url = "data:text/html,Hello world!";
 
     if url.starts_with("file://") {
         let path = &url[7..];
         let contents = fs::read_to_string(path).expect(format!("Can not read file: {}", path).as_str());
         println!("{}", contents);
+        return;
+    } else if url.starts_with("data:") {
+        let blocks: Vec<&str> = url.splitn(2, ",").collect();
+        println!("type: {}\ncontent: {}", blocks[0], blocks[1]);
         return;
     }
 
