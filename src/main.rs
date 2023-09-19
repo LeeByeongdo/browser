@@ -178,6 +178,7 @@ fn show(body: &String) {
     let mut in_angle = false;
     let mut in_body = false;
     let mut current_tag = String::new();
+    let mut result = String::new();
 
     for (_, c) in body.chars().enumerate() {
         match c {
@@ -190,7 +191,7 @@ fn show(body: &String) {
             }
             _ => {
                 if in_angle {
-                    current_tag = current_tag.add(c.to_string().as_str());
+                    current_tag.push(c);
                 }
 
                 if current_tag == "body" {
@@ -202,9 +203,11 @@ fn show(body: &String) {
                 }
 
                 if !in_angle && in_body {
-                    print!("{}", c);
+                    result.push(c);
                 }
             }
         }
     }
+    result = result.replace("&lt;", "<").replace("&gt;", ">");
+    print!("{}", result);
 }
