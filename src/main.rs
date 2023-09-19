@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fmt::format;
+use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::sync::Arc;
@@ -24,10 +25,20 @@ struct Response {
 
 fn main() {
     // utf-8 encoded
-    let url = "https://example.org";
+    // let url = "https://example.org";
 
     // ISO-8859-1 encoded
     // let url = "https://www.google.com";
+
+    //file
+    let url = "file:///Users/byeongdolee/ip_geolocation_2023_04_25_12_42_22.txt";
+
+    if url.starts_with("file://") {
+        let path = &url[7..];
+        let contents = fs::read_to_string(path).expect(format!("Can not read file: {}", path).as_str());
+        println!("{}", contents);
+        return;
+    }
 
     load(url);
 }
