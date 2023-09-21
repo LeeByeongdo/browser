@@ -1,10 +1,10 @@
 use std::collections::HashMap;
-use std::fmt::format;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
-use std::ops::Add;
 use std::sync::Arc;
+use flate2::read::{GzDecoder};
+use chunked_transfer::Decoder;
 
 struct URL {
     scheme: String,
@@ -26,10 +26,10 @@ struct Response {
 
 fn main() {
     // utf-8 encoded
-    let url = "https://example.org";
+    // let url = "https://example.org";
 
     // ISO-8859-1 encoded
-    // let url = "https://www.google.com";
+    let url = "https://www.google.com";
 
     //file
     // let url = "file:///Users/byeongdolee/ip_geolocation_2023_04_25_12_42_22.txt";
@@ -38,7 +38,7 @@ fn main() {
     // let url = "data:text/html,Hello world!";
 
     // view-source
-    let url = "view-source:https://example.org";
+    // let url = "view-source:https://example.org";
 
     load(url);
 }
@@ -130,11 +130,10 @@ fn request(url: &str) -> Result<Response, &str> {
         Header { key: String::from("Host"), value: String::from(url.host) },
         Header { key: String::from("Connection"), value: String::from("close") },
         Header { key: String::from("User-Agent"), value: String::from("BDBDBDLEE-BROWSER") },
-        // Header { key: String::from("Accept-Encoding"), value: String::from("gzip") },
+        Header { key: String::from("Accept-Encoding"), value: String::from("gzip") },
     ];
 
     let header_part = request_headers.iter().fold(String::new(), |a, b| format!("{}{}: {}\r\n", a, b.key, b.value));
-    println!("{}", header_part);
 
     tls.write(format!("GET {} HTTP/1.1\r\n{}\r\n", url.path, header_part).as_bytes())
         .expect("error to write");
@@ -169,20 +168,28 @@ fn request(url: &str) -> Result<Response, &str> {
         );
     }
 
-    // assert!(!headers.contains_key("transfer-encoding"));
-    // assert!(!headers.contains_key("content-encoding"));
+    let mut buffer = Vec::new();
 
-    if headers["content-type"] == "text/html; charset=ISO-8859-1" {
-        let mut buffer = Vec::new();
+    // 마지막에 unexpected end of file 에러가 나는데, 버퍼는 정상적으로 다 읽힘.
+    let _ = reader.read_to_end(&mut buffer);
 
-        // 마지막에 unexpected end of file 에러가 나는데, 버퍼는 정상적으로 다 읽힘.
-        let _ = reader.read_to_end(&mut buffer);
-        let body = String::from_utf8_lossy(&buffer).to_string();
+    if headers.contains_key("transfer-encoding") && headers["transfer-encoding"] == "chunked" {
+        let mut chunk_decoded = vec![];
+        let mut decoder = Decoder::new(&buffer[..]);
+        decoder.read_to_end(&mut chunk_decoded).unwrap();
+        buffer = chunk_decoded;
+    }
+
+    if headers.contains_key("content-encoding") && headers["content-encoding"] == "gzip" {
+        let mut decoder = GzDecoder::new(&buffer[..]);
+        let mut buffer2 = Vec::new();
+        decoder.read_to_end(&mut buffer2).unwrap();
+        let body = String::from_utf8_lossy(&buffer2).to_string();
+
         return Ok(Response { headers, body });
     }
 
-    let mut body = String::new();
-    reader.read_to_string(&mut body).unwrap();
+    let body = String::from_utf8_lossy(&buffer).to_string();
 
     Ok(Response { headers, body })
 }
