@@ -5,6 +5,7 @@ use std::net::TcpStream;
 use std::sync::Arc;
 use flate2::read::{GzDecoder};
 use chunked_transfer::Decoder;
+use rustls::{ClientConnection, Stream};
 
 struct URL {
     scheme: String,
@@ -108,50 +109,50 @@ fn request(url: &str) -> Result<Response, &str> {
     }
 
     let target = format!("{}:{}", url.host, url.port);
-
     let mut stream = TcpStream::connect(target.clone()).expect("Couldn't connect to server...");
+    let mut tls_conn = conn_tls(&url);
+    let mut tls_stream = Stream::new(&mut tls_conn, &mut stream);
+    send_tls(url, &mut tls_stream);
 
-    let mut roots = rustls::RootCertStore::empty();
-    for cert in rustls_native_certs::load_native_certs().expect("could not load platform certs") {
-        roots.add(&rustls::Certificate(cert.0)).unwrap();
+    let mut reader = BufReader::new(tls_stream);
+
+    parse_response_status(&mut reader);
+
+    let headers = parse_response_headers(&mut reader);
+
+    let mut body_result_buffer = Vec::new();
+
+    // 마지막에 unexpected end of file 에러가 나는데, 버퍼는 정상적으로 다 읽힘.
+    let _ = reader.read_to_end(&mut body_result_buffer);
+
+    // 순서 중요하다. chunk 먼저!
+    handle_chunk_body(&headers, &mut body_result_buffer);
+    handle_gzip_body(&headers, &mut body_result_buffer);
+
+    let body = String::from_utf8_lossy(&body_result_buffer).to_string();
+
+    Ok(Response { headers, body })
+}
+
+fn handle_gzip_body(headers: &HashMap<String, String>, buffer: &mut Vec<u8>) {
+    if headers.contains_key("content-encoding") && headers["content-encoding"] == "gzip" {
+        let mut decoder = GzDecoder::new(&buffer[..]);
+        let mut gzip_decoded = Vec::new();
+        decoder.read_to_end(&mut gzip_decoded).unwrap();
+        *buffer = gzip_decoded;
     }
+}
 
-    let config = rustls::ClientConfig::builder()
-        .with_safe_defaults()
-        .with_root_certificates(roots)
-        .with_no_client_auth();
+fn handle_chunk_body(headers: &HashMap<String, String>, buffer: &mut Vec<u8>) {
+    if headers.contains_key("transfer-encoding") && headers["transfer-encoding"] == "chunked" {
+        let mut chunk_decoded = vec![];
+        let mut decoder = Decoder::new(&buffer[..]);
+        decoder.read_to_end(&mut chunk_decoded).unwrap();
+        *buffer = chunk_decoded;
+    }
+}
 
-    let mut conn =
-        rustls::ClientConnection::new(Arc::new(config), url.host[..].try_into().unwrap())
-            .unwrap();
-    let mut tls = rustls::Stream::new(&mut conn, &mut stream);
-
-    let request_headers = vec![
-        Header { key: String::from("Host"), value: String::from(url.host) },
-        Header { key: String::from("Connection"), value: String::from("close") },
-        Header { key: String::from("User-Agent"), value: String::from("BDBDBDLEE-BROWSER") },
-        Header { key: String::from("Accept-Encoding"), value: String::from("gzip") },
-    ];
-
-    let header_part = request_headers.iter().fold(String::new(), |a, b| format!("{}{}: {}\r\n", a, b.key, b.value));
-
-    tls.write(format!("GET {} HTTP/1.1\r\n{}\r\n", url.path, header_part).as_bytes())
-        .expect("error to write");
-
-    let mut reader = BufReader::new(tls);
-    let mut status = String::new();
-
-    reader
-        .read_line(&mut status)
-        .expect("error reading status line.");
-
-    let blocks: Vec<&str> = status.splitn(3, " ").collect();
-    let version = blocks[0];
-    let status = blocks[1];
-    let explanation = blocks[2];
-
-    println!("version: {}, status: {}, explanation: {}", version, status, explanation);
-
+fn parse_response_headers(reader: &mut BufReader<Stream<ClientConnection, TcpStream>>) -> HashMap<String, String> {
     let mut headers = HashMap::new();
 
     loop {
@@ -167,31 +168,53 @@ fn request(url: &str) -> Result<Response, &str> {
             String::from(blocks[1].trim()),
         );
     }
+    headers
+}
 
-    let mut buffer = Vec::new();
+fn parse_response_status(reader: &mut BufReader<Stream<ClientConnection, TcpStream>>) {
+    let mut status = String::new();
 
-    // 마지막에 unexpected end of file 에러가 나는데, 버퍼는 정상적으로 다 읽힘.
-    let _ = reader.read_to_end(&mut buffer);
+    reader
+        .read_line(&mut status)
+        .expect("error reading status line.");
 
-    if headers.contains_key("transfer-encoding") && headers["transfer-encoding"] == "chunked" {
-        let mut chunk_decoded = vec![];
-        let mut decoder = Decoder::new(&buffer[..]);
-        decoder.read_to_end(&mut chunk_decoded).unwrap();
-        buffer = chunk_decoded;
+    let blocks: Vec<&str> = status.splitn(3, " ").collect();
+    let version = blocks[0];
+    let status = blocks[1];
+    let explanation = blocks[2];
+
+    println!("version: {}, status: {}, explanation: {}", version, status, explanation);
+}
+
+fn send_tls(url: URL, tls: &mut Stream<ClientConnection, TcpStream>) {
+    let request_headers = vec![
+        Header { key: String::from("Host"), value: String::from(url.host) },
+        Header { key: String::from("Connection"), value: String::from("close") },
+        Header { key: String::from("User-Agent"), value: String::from("BDBDBDLEE-BROWSER") },
+        Header { key: String::from("Accept-Encoding"), value: String::from("gzip") },
+    ];
+
+    let header_part = request_headers.iter().fold(String::new(), |a, b| format!("{}{}: {}\r\n", a, b.key, b.value));
+
+    tls.write(format!("GET {} HTTP/1.1\r\n{}\r\n", url.path, header_part).as_bytes())
+        .expect("error to write");
+}
+
+fn conn_tls(url: &URL) -> ClientConnection {
+    let mut roots = rustls::RootCertStore::empty();
+    for cert in rustls_native_certs::load_native_certs().expect("could not load platform certs") {
+        roots.add(&rustls::Certificate(cert.0)).unwrap();
     }
 
-    if headers.contains_key("content-encoding") && headers["content-encoding"] == "gzip" {
-        let mut decoder = GzDecoder::new(&buffer[..]);
-        let mut buffer2 = Vec::new();
-        decoder.read_to_end(&mut buffer2).unwrap();
-        let body = String::from_utf8_lossy(&buffer2).to_string();
+    let config = rustls::ClientConfig::builder()
+        .with_safe_defaults()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
 
-        return Ok(Response { headers, body });
-    }
-
-    let body = String::from_utf8_lossy(&buffer).to_string();
-
-    Ok(Response { headers, body })
+    let conn =
+        ClientConnection::new(Arc::new(config), url.host[..].try_into().unwrap())
+            .unwrap();
+    conn
 }
 
 fn show(body: &String) {
