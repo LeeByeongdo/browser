@@ -30,7 +30,7 @@ fn main() {
     // let url = "https://example.org";
 
     // ISO-8859-1 encoded
-    let url = "https://www.google.com";
+    // let url = "https://www.google.com";
 
     //file
     // let url = "file:///Users/byeongdolee/ip_geolocation_2023_04_25_12_42_22.txt";
@@ -40,6 +40,9 @@ fn main() {
 
     // view-source
     // let url = "view-source:https://example.org";
+
+    // redirect_url
+    let url = "https://browser.engineering/redirect";
 
     load(url);
 }
@@ -103,35 +106,51 @@ fn parse_url(url: &str) -> URL {
 }
 
 fn request(url: &str) -> Result<Response, &str> {
-    let url = parse_url(url);
+    let mut url = parse_url(url);
     if url.scheme == "http" {
         return Err("no http supported");
     }
 
-    let target = format!("{}:{}", url.host, url.port);
-    let mut stream = TcpStream::connect(target.clone()).expect("Couldn't connect to server...");
-    let mut tls_conn = conn_tls(&url);
-    let mut tls_stream = Stream::new(&mut tls_conn, &mut stream);
-    send_tls(url, &mut tls_stream);
+    let res = loop {
+        let target = format!("{}:{}", url.host, url.port);
+        let mut stream = TcpStream::connect(target.clone()).expect("Couldn't connect to server...");
+        let mut tls_conn = conn_tls(&url);
+        let mut tls_stream = Stream::new(&mut tls_conn, &mut stream);
+        send_tls(&url, &mut tls_stream);
+        let mut reader = BufReader::new(tls_stream);
 
-    let mut reader = BufReader::new(tls_stream);
+        let status = parse_response_status(&mut reader);
 
-    parse_response_status(&mut reader);
+        let headers = parse_response_headers(&mut reader);
 
-    let headers = parse_response_headers(&mut reader);
+        if status.starts_with("3") {
+            // clear buffer
+            let mut empty = Vec::new();
+            let _ = reader.read_to_end(&mut empty);
 
-    let mut body_result_buffer = Vec::new();
+            let location = headers.get("location").unwrap();
+            url = if location.starts_with("http") {
+                parse_url(location)
+            } else {
+                parse_url(format!("{}://{}{}", url.scheme, url.host, location).as_str())
+            };
 
-    // 마지막에 unexpected end of file 에러가 나는데, 버퍼는 정상적으로 다 읽힘.
-    let _ = reader.read_to_end(&mut body_result_buffer);
+            continue;
+        }
 
-    // 순서 중요하다. chunk 먼저!
-    handle_chunk_body(&headers, &mut body_result_buffer);
-    handle_gzip_body(&headers, &mut body_result_buffer);
+        let mut body_result_buffer = Vec::new();
 
-    let body = String::from_utf8_lossy(&body_result_buffer).to_string();
+        // 마지막에 unexpected end of file 에러가 나는데, 버퍼는 정상적으로 다 읽힘.
+        let _ = reader.read_to_end(&mut body_result_buffer);
 
-    Ok(Response { headers, body })
+        // 순서 중요하다. chunk 먼저!
+        handle_chunk_body(&headers, &mut body_result_buffer);
+        handle_gzip_body(&headers, &mut body_result_buffer);
+
+        break (String::from_utf8_lossy(&body_result_buffer).to_string(), headers);
+    };
+
+    Ok(Response { headers: res.1, body: res.0 })
 }
 
 fn handle_gzip_body(headers: &HashMap<String, String>, buffer: &mut Vec<u8>) {
@@ -171,7 +190,7 @@ fn parse_response_headers(reader: &mut BufReader<Stream<ClientConnection, TcpStr
     headers
 }
 
-fn parse_response_status(reader: &mut BufReader<Stream<ClientConnection, TcpStream>>) {
+fn parse_response_status(reader: &mut BufReader<Stream<ClientConnection, TcpStream>>) -> String {
     let mut status = String::new();
 
     reader
@@ -184,11 +203,13 @@ fn parse_response_status(reader: &mut BufReader<Stream<ClientConnection, TcpStre
     let explanation = blocks[2];
 
     println!("version: {}, status: {}, explanation: {}", version, status, explanation);
+
+    String::from(status)
 }
 
-fn send_tls(url: URL, tls: &mut Stream<ClientConnection, TcpStream>) {
+fn send_tls(url: &URL, tls: &mut Stream<ClientConnection, TcpStream>) {
     let request_headers = vec![
-        Header { key: String::from("Host"), value: String::from(url.host) },
+        Header { key: String::from("Host"), value: String::from(&url.host) },
         Header { key: String::from("Connection"), value: String::from("close") },
         Header { key: String::from("User-Agent"), value: String::from("BDBDBDLEE-BROWSER") },
         Header { key: String::from("Accept-Encoding"), value: String::from("gzip") },
